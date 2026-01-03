@@ -5,7 +5,7 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-const GROQ_API_KEY = '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';
+const GROQ_API_KEY = process.env.GROQ_API_KEY;
 const GROQ_API_URL = 'https://api.groq.com/openai/v1/chat/completions';
 
 let supabaseUrl = null;
