@@ -3,246 +3,1109 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Audit</title>
+    <title>Gem - Natural Language to SQL</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;1,9..40,300&family=Instrument+Serif:ital@0;1&display=swap" rel="stylesheet">
     <style>
-        * { margin: 0; padding: 0; box-sizing: border-box; }
-        :root { --bg: #fff; --fg: #000; --muted: #888; --border: #e0e0e0; --critical: #d00; --warning: #666; --clean: #000; }
-        body { background: var(--bg); color: var(--fg); font-family: 'IBM Plex Sans', sans-serif; font-weight: 300; min-height: 100vh; line-height: 1.6; }
-        .mono { font-family: 'IBM Plex Mono', monospace; }
-        .connect-screen { height: 100vh; display: flex; align-items: center; justify-content: center; flex-direction: column; gap: 1.5rem; animation: fadeIn 0.6s ease; }
-        .connect-screen.hidden { display: none; }
-        .connect-title { font-size: 0.75rem; letter-spacing: 0.2em; text-transform: uppercase; color: var(--muted); margin-bottom: 1rem; }
-        .connect-form { display: flex; flex-direction: column; gap: 1rem; width: 480px; max-width: 90vw; }
-        .input-group { display: flex; flex-direction: column; gap: 0.375rem; }
-        .input-label { font-size: 0.6875rem; letter-spacing: 0.1em; text-transform: uppercase; color: var(--muted); }
-        .connect-input { background: transparent; border: 1px solid var(--border); color: var(--fg); font-family: 'IBM Plex Mono', monospace; font-size: 0.8125rem; padding: 0.875rem 1rem; outline: none; transition: border-color 0.2s ease; }
-        .connect-input:focus { border-color: var(--fg); }
-        .connect-input::placeholder { color: var(--muted); }
-        .connect-btn { background: var(--fg); color: var(--bg); border: none; padding: 0.875rem 1rem; font-family: 'IBM Plex Sans', sans-serif; font-size: 0.75rem; letter-spacing: 0.1em; text-transform: uppercase; cursor: pointer; transition: opacity 0.15s ease; margin-top: 0.5rem; }
-        .connect-btn:hover { opacity: 0.8; }
-        .connect-btn:disabled { opacity: 0.4; cursor: not-allowed; }
-        .connect-hint { font-size: 0.6875rem; color: var(--muted); text-align: center; }
-        .connect-error { font-size: 0.75rem; color: var(--critical); text-align: center; }
-        .main-interface { display: none; height: 100vh; animation: fadeIn 0.4s ease; }
-        .main-interface.active { display: grid; grid-template-columns: 260px 1fr; }
-        .sidebar { border-right: 1px solid var(--border); padding: 2rem 0; overflow-y: auto; display: flex; flex-direction: column; }
-        .sidebar-header { padding: 0 1.5rem 1.5rem; border-bottom: 1px solid var(--border); margin-bottom: 1rem; }
-        .sidebar-title { font-size: 0.625rem; letter-spacing: 0.2em; text-transform: uppercase; color: var(--muted); margin-bottom: 0.5rem; }
-        .db-name { font-family: 'IBM Plex Mono', monospace; font-size: 0.875rem; }
-        .table-list { list-style: none; flex: 1; overflow-y: auto; }
-        .table-item { padding: 0.625rem 1.5rem; display: flex; align-items: center; gap: 0.75rem; cursor: pointer; transition: background 0.15s ease; font-size: 0.875rem; }
-        .table-item:hover { background: var(--border); }
-        .table-item.active { background: var(--border); }
-        .table-info { display: flex; flex-direction: column; gap: 0.125rem; flex: 1; min-width: 0; }
-        .table-name { font-family: 'IBM Plex Mono', monospace; font-size: 0.8125rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-        .table-meta { font-size: 0.6875rem; color: var(--muted); }
-        .status-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--clean); flex-shrink: 0; }
-        .status-dot.warning { background: var(--warning); }
-        .status-dot.critical { background: var(--critical); }
-        .sidebar-footer { padding: 1rem 1.5rem; border-top: 1px solid var(--border); }
-        .audit-btn { width: 100%; background: var(--fg); color: var(--bg); border: none; padding: 0.75rem 1rem; font-family: 'IBM Plex Sans', sans-serif; font-size: 0.75rem; letter-spacing: 0.1em; text-transform: uppercase; cursor: pointer; transition: opacity 0.15s ease; }
-        .audit-btn:hover { opacity: 0.8; }
-        .audit-btn:disabled { opacity: 0.4; cursor: not-allowed; }
-        .content { display: flex; flex-direction: column; height: 100vh; }
-        .command-bar { padding: 1.5rem 2rem; border-bottom: 1px solid var(--border); }
-        .command-input { background: transparent; border: none; color: var(--fg); font-family: 'IBM Plex Mono', monospace; font-size: 0.875rem; width: 100%; outline: none; }
-        .command-input::placeholder { color: var(--muted); }
-        .audit-feed { flex: 1; overflow-y: auto; padding: 2rem; }
-        .audit-summary { margin-bottom: 3rem; padding-bottom: 2rem; border-bottom: 1px solid var(--border); }
-        .summary-stats { display: flex; gap: 3rem; }
-        .stat { display: flex; flex-direction: column; gap: 0.25rem; }
-        .stat-value { font-size: 2rem; font-weight: 500; letter-spacing: -0.02em; }
-        .stat-label { font-size: 0.625rem; letter-spacing: 0.2em; text-transform: uppercase; color: var(--muted); }
-        .finding-card { padding: 1.5rem 0; border-bottom: 1px solid var(--border); cursor: pointer; }
-        .finding-header { display: flex; align-items: baseline; gap: 1rem; margin-bottom: 0.5rem; }
-        .finding-severity { font-size: 0.625rem; letter-spacing: 0.15em; text-transform: uppercase; font-weight: 500; }
-        .finding-severity.critical { color: var(--critical); }
-        .finding-severity.warning { color: var(--warning); }
-        .finding-location { font-family: 'IBM Plex Mono', monospace; font-size: 0.75rem; color: var(--muted); }
-        .finding-type { font-family: 'IBM Plex Mono', monospace; font-size: 0.625rem; color: var(--muted); padding: 0.125rem 0.375rem; background: var(--border); border-radius: 2px; }
-        .finding-summary { font-size: 0.9375rem; max-width: 720px; }
-        .finding-details { display: none; margin-top: 1.5rem; padding-top: 1.5rem; border-top: 1px solid var(--border); }
-        .finding-card.expanded .finding-details { display: block; animation: slideDown 0.3s ease; }
-        .finding-analysis { font-size: 0.875rem; color: var(--muted); max-width: 720px; margin-bottom: 1rem; line-height: 1.7; }
-        .finding-sample { background: #f5f5f5; padding: 1rem; font-family: 'IBM Plex Mono', monospace; font-size: 0.6875rem; overflow-x: auto; margin-bottom: 1.5rem; white-space: pre; max-height: 200px; overflow-y: auto; }
-        .finding-fix { font-size: 0.875rem; }
-        .fix-label { font-size: 0.625rem; letter-spacing: 0.15em; text-transform: uppercase; color: var(--muted); margin-bottom: 0.5rem; }
-        .loading-details { color: var(--muted); font-size: 0.875rem; }
-        .empty-state { text-align: center; padding: 4rem 2rem; color: var(--muted); }
-        .empty-state p { margin-bottom: 0.5rem; }
-        .ai-response { padding: 1.5rem 0; border-bottom: 1px solid var(--border); }
-        .ai-response-header { display: flex; align-items: baseline; gap: 1rem; margin-bottom: 0.75rem; }
-        .ai-response-label { font-size: 0.625rem; letter-spacing: 0.15em; text-transform: uppercase; font-weight: 500; }
-        .ai-response-query { font-family: 'IBM Plex Mono', monospace; font-size: 0.75rem; color: var(--muted); }
-        .ai-response-content { font-size: 0.9375rem; max-width: 720px; line-height: 1.7; white-space: pre-wrap; }
-        .streaming::after { content: '▊'; animation: blink 0.8s infinite; }
-        @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
-        @keyframes slideDown { from { opacity: 0; transform: translateY(-8px); } to { opacity: 1; transform: translateY(0); } }
-        @keyframes blink { 0%, 50% { opacity: 1; } 51%, 100% { opacity: 0; } }
-        ::-webkit-scrollbar { width: 8px; }
-        ::-webkit-scrollbar-track { background: transparent; }
-        ::-webkit-scrollbar-thumb { background: var(--border); }
-        ::-webkit-scrollbar-thumb:hover { background: var(--muted); }
+        :root {
+            --color-bg: #ffffff;
+            --color-text: #1a1a1a;
+            --color-text-muted: #6b6b6b;
+            --color-border: #e5e5e5;
+            --color-border-focus: #1a1a1a;
+            --color-accent: #0a0a0a;
+            --color-success: #22c55e;
+            --color-error: #ef4444;
+            --font-display: 'Instrument Serif', Georgia, serif;
+            --font-body: 'DM Sans', -apple-system, sans-serif;
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: var(--font-body);
+            background: var(--color-bg);
+            color: var(--color-text);
+            min-height: 100vh;
+            height: 100vh;
+            display: flex;
+            flex-direction: column;
+            -webkit-font-smoothing: antialiased;
+            overflow: hidden;
+        }
+
+        header {
+            padding: 1rem 2rem;
+            display: flex;
+            justify-content: center;
+            flex-shrink: 0;
+        }
+
+        .logo {
+            font-family: var(--font-display);
+            font-size: 1.25rem;
+            font-weight: 400;
+            letter-spacing: -0.02em;
+            color: var(--color-text);
+        }
+
+        main {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            padding: 2rem;
+        }
+
+        main.query-active {
+            justify-content: flex-start;
+            padding-top: 1rem;
+            overflow: hidden;
+        }
+
+        main.query-active .hero-title {
+            display: none;
+        }
+
+        .hero-title {
+            font-family: var(--font-display);
+            font-size: clamp(2rem, 4vw, 2.75rem);
+            font-weight: 400;
+            text-align: center;
+            margin-bottom: 2rem;
+            letter-spacing: -0.02em;
+            line-height: 1.2;
+        }
+
+        .hero-title em {
+            font-style: italic;
+            color: var(--color-text-muted);
+        }
+
+        .content-wrapper {
+            width: 100%;
+            max-width: 800px;
+            display: flex;
+            flex-direction: column;
+        }
+
+        main.query-active .content-wrapper {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            height: 100%;
+            overflow: hidden;
+        }
+
+        main.query-active .query-box {
+            flex-shrink: 0;
+        }
+
+        .response-area {
+            display: none;
+            margin-bottom: 1rem;
+            overflow-y: auto;
+            padding: 1rem 0;
+            flex: 1;
+            min-height: 0;
+        }
+
+        .response-area::-webkit-scrollbar {
+            display: none;
+        }
+
+        .response-area {
+            -ms-overflow-style: none;
+            scrollbar-width: none;
+        }
+
+        .response-area.active {
+            display: block;
+            animation: fadeIn 0.3s ease;
+        }
+
+        .conversation-entry {
+            margin-bottom: 1.5rem;
+        }
+
+        .conversation-entry:last-child {
+            margin-bottom: 0;
+        }
+
+        .user-query {
+            font-size: 0.9375rem;
+            color: var(--color-text);
+            margin-bottom: 1rem;
+            font-weight: 500;
+            text-align: right;
+        }
+
+        .response-box {
+            border: none;
+            border-radius: 16px;
+            overflow: hidden;
+            background: var(--color-bg);
+        }
+
+        .sql-preview {
+            padding: 1.25rem;
+            background: #fafafa;
+            border-radius: 12px;
+            margin-bottom: 1rem;
+        }
+
+        .sql-preview.hidden {
+            display: none;
+        }
+
+        .sql-preview-label {
+            font-size: 0.75rem;
+            font-weight: 500;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            color: var(--color-text-muted);
+            margin-bottom: 0.75rem;
+        }
+
+        .sql-code {
+            font-family: 'SF Mono', 'Fira Code', monospace;
+            font-size: 0.875rem;
+            line-height: 1.6;
+            color: var(--color-text);
+            white-space: pre-wrap;
+            word-break: break-word;
+        }
+
+        .sql-code.error {
+            color: var(--color-error);
+        }
+
+        .sql-code.loading {
+            color: var(--color-text-muted);
+        }
+
+        .results-section {
+            padding: 1.25rem;
+            display: none;
+        }
+
+        .results-section.active {
+            display: block;
+        }
+
+        .results-label {
+            display: none;
+        }
+
+        .conversational-response {
+            font-family: var(--font-body);
+            font-size: 0.9375rem;
+            line-height: 1.7;
+            color: var(--color-text);
+            white-space: pre-wrap;
+        }
+
+        .conversational-response.loading {
+            color: var(--color-text-muted);
+        }
+
+        .conversational-response.error {
+            color: var(--color-error);
+        }
+
+        .response-actions {
+            display: flex;
+            gap: 0.75rem;
+            margin-bottom: 1rem;
+        }
+
+        .response-actions.hidden {
+            display: none;
+        }
+
+        .btn-confirm {
+            flex: 1;
+            padding: 0.75rem 1.25rem;
+            background: var(--color-accent);
+            border: none;
+            border-radius: 10px;
+            font-family: var(--font-body);
+            font-size: 0.9375rem;
+            font-weight: 500;
+            color: white;
+            cursor: pointer;
+            transition: opacity 0.2s ease;
+        }
+
+        .btn-confirm:hover {
+            opacity: 0.85;
+        }
+
+        .btn-confirm:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+
+        .btn-cancel {
+            padding: 0.75rem 1.25rem;
+            background: transparent;
+            border: 1px solid var(--color-border);
+            border-radius: 10px;
+            font-family: var(--font-body);
+            font-size: 0.9375rem;
+            color: var(--color-text-muted);
+            cursor: pointer;
+            transition: all 0.2s ease;
+        }
+
+        .btn-cancel:hover {
+            border-color: var(--color-text);
+            color: var(--color-text);
+        }
+
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(4px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        .query-box {
+            width: 100%;
+            border: 1px solid var(--color-border);
+            border-radius: 16px;
+            padding: 1.25rem;
+            background: var(--color-bg);
+            transition: border-color 0.2s ease, box-shadow 0.2s ease;
+        }
+
+        .query-box:focus-within {
+            border-color: var(--color-border-focus);
+            box-shadow: 0 0 0 3px rgba(0, 0, 0, 0.04);
+        }
+
+        .query-textarea {
+            width: 100%;
+            min-height: 60px;
+            border: none;
+            outline: none;
+            resize: none;
+            font-family: var(--font-body);
+            font-size: 1rem;
+            line-height: 1.6;
+            color: var(--color-text);
+            background: transparent;
+            transition: min-height 0.3s ease;
+        }
+
+        main.query-active .query-textarea {
+            min-height: 40px;
+        }
+
+        .query-textarea::placeholder {
+            color: var(--color-text-muted);
+        }
+
+        .query-actions {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-top: 0.75rem;
+        }
+
+        .connect-btn {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            padding: 0.5rem 0.875rem;
+            background: transparent;
+            border: 1px solid var(--color-border);
+            border-radius: 8px;
+            font-family: var(--font-body);
+            font-size: 0.875rem;
+            color: var(--color-text-muted);
+            cursor: pointer;
+            transition: all 0.2s ease;
+        }
+
+        .connect-btn:hover {
+            border-color: var(--color-text);
+            color: var(--color-text);
+        }
+
+        .connect-btn.connected {
+            border-color: #22c55e;
+            color: #16a34a;
+            background: #f0fdf4;
+        }
+
+        .connect-btn.connecting {
+            opacity: 0.6;
+            cursor: wait;
+        }
+
+        .connect-btn svg {
+            width: 16px;
+            height: 16px;
+            transform: rotate(90deg);
+        }
+
+        .submit-btn {
+            padding: 0.625rem 1.25rem;
+            background: var(--color-accent);
+            border: none;
+            border-radius: 8px;
+            font-family: var(--font-body);
+            font-size: 0.875rem;
+            font-weight: 500;
+            color: white;
+            cursor: pointer;
+            transition: opacity 0.2s ease;
+        }
+
+        .submit-btn:hover {
+            opacity: 0.85;
+        }
+
+        .submit-btn:disabled {
+            opacity: 0.4;
+            cursor: not-allowed;
+        }
+
+        footer {
+            padding: 1.5rem 2rem;
+            display: flex;
+            justify-content: center;
+            gap: 2rem;
+            flex-shrink: 0;
+        }
+
+        main.query-active ~ footer {
+            display: none;
+        }
+
+        footer a {
+            font-size: 0.875rem;
+            color: var(--color-text-muted);
+            text-decoration: none;
+            transition: color 0.2s ease;
+        }
+
+        footer a:hover {
+            color: var(--color-text);
+        }
+
+        .modal-overlay {
+            position: fixed;
+            inset: 0;
+            background: rgba(0, 0, 0, 0.4);
+            backdrop-filter: blur(4px);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            opacity: 0;
+            visibility: hidden;
+            transition: all 0.25s ease;
+            z-index: 100;
+        }
+
+        .modal-overlay.active {
+            opacity: 1;
+            visibility: visible;
+        }
+
+        .modal {
+            background: var(--color-bg);
+            border-radius: 20px;
+            width: 100%;
+            max-width: 480px;
+            margin: 1rem;
+            transform: translateY(10px) scale(0.98);
+            transition: transform 0.25s ease;
+            overflow: hidden;
+        }
+
+        .modal-overlay.active .modal {
+            transform: translateY(0) scale(1);
+        }
+
+        .modal-header {
+            padding: 1.5rem 1.5rem 0;
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-start;
+        }
+
+        .modal-title {
+            font-family: var(--font-display);
+            font-size: 1.5rem;
+            font-weight: 400;
+        }
+
+        .modal-subtitle {
+            font-size: 0.875rem;
+            color: var(--color-text-muted);
+            margin-top: 0.25rem;
+        }
+
+        .modal-close {
+            background: none;
+            border: none;
+            padding: 0.25rem;
+            cursor: pointer;
+            color: var(--color-text-muted);
+            transition: color 0.2s ease;
+        }
+
+        .modal-close:hover {
+            color: var(--color-text);
+        }
+
+        .modal-body {
+            padding: 1.5rem;
+        }
+
+        .connection-tabs {
+            display: flex;
+            gap: 0.25rem;
+            background: #f5f5f5;
+            border-radius: 10px;
+            padding: 0.25rem;
+            margin-bottom: 1.5rem;
+        }
+
+        .connection-tab {
+            flex: 1;
+            padding: 0.625rem 1rem;
+            background: transparent;
+            border: none;
+            border-radius: 8px;
+            font-family: var(--font-body);
+            font-size: 0.875rem;
+            color: var(--color-text-muted);
+            cursor: pointer;
+            transition: all 0.2s ease;
+        }
+
+        .connection-tab.active {
+            background: white;
+            color: var(--color-text);
+            box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
+        }
+
+        .tab-content {
+            display: none;
+        }
+
+        .tab-content.active {
+            display: block;
+            animation: fadeIn 0.2s ease;
+        }
+
+        .form-group {
+            margin-bottom: 1rem;
+        }
+
+        .form-label {
+            display: block;
+            font-size: 0.8125rem;
+            font-weight: 500;
+            margin-bottom: 0.5rem;
+            color: var(--color-text);
+        }
+
+        .form-input {
+            width: 100%;
+            padding: 0.75rem 1rem;
+            border: 1px solid var(--color-border);
+            border-radius: 10px;
+            font-family: var(--font-body);
+            font-size: 0.9375rem;
+            color: var(--color-text);
+            transition: border-color 0.2s ease;
+        }
+
+        .form-input:focus {
+            outline: none;
+            border-color: var(--color-border-focus);
+        }
+
+        .form-input::placeholder {
+            color: #b0b0b0;
+        }
+
+        .form-row {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 0.75rem;
+        }
+
+        .db-type-selector {
+            display: flex;
+            gap: 0.5rem;
+            margin-bottom: 1.25rem;
+        }
+
+        .db-type-btn {
+            flex: 1;
+            padding: 0.75rem;
+            background: transparent;
+            border: 1px solid var(--color-border);
+            border-radius: 10px;
+            font-family: var(--font-body);
+            font-size: 0.875rem;
+            color: var(--color-text-muted);
+            cursor: pointer;
+            transition: all 0.2s ease;
+        }
+
+        .db-type-btn:hover {
+            border-color: var(--color-text);
+        }
+
+        .db-type-btn.active {
+            border-color: var(--color-text);
+            background: var(--color-text);
+            color: white;
+        }
+
+        .modal-footer {
+            padding: 0 1.5rem 1.5rem;
+        }
+
+        .connect-submit-btn {
+            width: 100%;
+            padding: 0.875rem;
+            background: var(--color-accent);
+            border: none;
+            border-radius: 10px;
+            font-family: var(--font-body);
+            font-size: 0.9375rem;
+            font-weight: 500;
+            color: white;
+            cursor: pointer;
+            transition: opacity 0.2s ease;
+        }
+
+        .connect-submit-btn:hover {
+            opacity: 0.85;
+        }
+
+        .connect-submit-btn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+
+        .connection-error {
+            color: var(--color-error);
+            font-size: 0.875rem;
+            margin-top: 1rem;
+            text-align: center;
+        }
     </style>
 </head>
 <body>
-    <div class="connect-screen" id="connectScreen">
-        <span class="connect-title">Audit</span>
-        <div class="connect-form">
-            <div class="input-group">
-                <span class="input-label">Project URL</span>
-                <input type="text" class="connect-input" id="projectUrlInput" placeholder="xxxxxxxxxxxx.supabase.co" autocomplete="off" spellcheck="false">
-            </div>
-            <div class="input-group">
-                <span class="input-label">Anon Key</span>
-                <input type="text" class="connect-input" id="anonKeyInput" placeholder="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..." autocomplete="off" spellcheck="false">
-            </div>
-            <button class="connect-btn" id="connectBtn">Connect</button>
-        </div>
-        <span class="connect-hint">find these in your Supabase project settings → API</span>
-        <span class="connect-error" id="connectError"></span>
-    </div>
+    <header>
+        <div class="logo">Gem</div>
+    </header>
 
-    <div class="main-interface" id="mainInterface">
-        <aside class="sidebar">
-            <div class="sidebar-header">
-                <div class="sidebar-title">Connected</div>
-                <div class="db-name" id="dbName">project</div>
+    <main>
+        <h1 class="hero-title">Talk to your database, <em>naturally</em></h1>
+
+        <div class="content-wrapper">
+            <div class="response-area" id="responseArea">
             </div>
-            <ul class="table-list" id="tableList"></ul>
-            <div class="sidebar-footer">
-                <button class="audit-btn" id="auditBtn">Run Audit</button>
+
+            <div class="query-box">
+                <textarea 
+                    class="query-textarea" 
+                    placeholder="Ask anything about your data..."
+                    id="queryInput"
+                ></textarea>
+                <div class="query-actions">
+                    <button class="connect-btn" id="connectBtn">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <path d="M12 22v-5"/>
+                            <path d="M9 8V2"/>
+                            <path d="M15 8V2"/>
+                            <path d="M18 8v5a4 4 0 0 1-4 4h-4a4 4 0 0 1-4-4V8Z"/>
+                        </svg>
+                        <span>Connect</span>
+                    </button>
+                    <button class="submit-btn" id="submitBtn" disabled>Run Query</button>
+                </div>
             </div>
-        </aside>
-        <main class="content">
-            <div class="command-bar">
-                <input type="text" class="command-input" id="commandInput" placeholder="ask anything about your data..." autocomplete="off" spellcheck="false">
+        </div>
+    </main>
+
+    <footer>
+        <a href="/privacy">Privacy</a>
+        <a href="/support">Support</a>
+    </footer>
+
+    <div class="modal-overlay" id="connectionModal">
+        <div class="modal">
+            <div class="modal-header">
+                <div>
+                    <h2 class="modal-title">Connect Database</h2>
+                    <p class="modal-subtitle">Choose your connection method</p>
+                </div>
+                <button class="modal-close" id="modalClose">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <line x1="18" y1="6" x2="6" y2="18"></line>
+                        <line x1="6" y1="6" x2="18" y2="18"></line>
+                    </svg>
+                </button>
             </div>
-            <div class="audit-feed" id="auditFeed">
-                <div class="audit-summary" id="auditSummary" style="display: none;">
-                    <div class="summary-stats">
-                        <div class="stat"><span class="stat-value" id="totalFindings">0</span><span class="stat-label">Findings</span></div>
-                        <div class="stat"><span class="stat-value" id="criticalCount">0</span><span class="stat-label">Critical</span></div>
-                        <div class="stat"><span class="stat-value" id="tablesScanned">0</span><span class="stat-label">Tables</span></div>
+            <div class="modal-body">
+                <div class="connection-tabs">
+                    <button class="connection-tab active" data-tab="url">Connection URL</button>
+                    <button class="connection-tab" data-tab="manual">Manual</button>
+                </div>
+
+                <div class="tab-content active" id="urlTab">
+                    <div class="db-type-selector">
+                        <button class="db-type-btn active" data-db="postgresql">PostgreSQL</button>
+                        <button class="db-type-btn" data-db="mysql">MySQL</button>
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">Connection String</label>
+                        <input 
+                            type="text" 
+                            class="form-input" 
+                            id="connectionUrl"
+                            placeholder="postgresql://user:password@host:5432/database"
+                        >
                     </div>
                 </div>
-                <div id="findingsContainer">
-                    <div class="empty-state"><p>No audit results yet.</p><p style="font-size: 0.8125rem;">Click "Run Audit" to analyze your database.</p></div>
+
+                <div class="tab-content" id="manualTab">
+                    <div class="db-type-selector">
+                        <button class="db-type-btn active" data-db="postgresql">PostgreSQL</button>
+                        <button class="db-type-btn" data-db="mysql">MySQL</button>
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">Host</label>
+                        <input type="text" class="form-input" id="dbHost" placeholder="localhost or db.example.com">
+                    </div>
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label class="form-label">Port</label>
+                            <input type="text" class="form-input" id="dbPort" placeholder="5432">
+                        </div>
+                        <div class="form-group">
+                            <label class="form-label">Database</label>
+                            <input type="text" class="form-input" id="dbName" placeholder="my_database">
+                        </div>
+                    </div>
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label class="form-label">Username</label>
+                            <input type="text" class="form-input" id="dbUser" placeholder="postgres">
+                        </div>
+                        <div class="form-group">
+                            <label class="form-label">Password</label>
+                            <input type="password" class="form-input" id="dbPassword" placeholder="••••••••">
+                        </div>
+                    </div>
                 </div>
+
+                <div class="connection-error" id="connectionError"></div>
             </div>
-        </main>
+            <div class="modal-footer">
+                <button class="connect-submit-btn" id="connectSubmit">Connect</button>
+            </div>
+        </div>
     </div>
 
     <script>
-        const API_BASE = window.location.origin;
-        let currentFindings = [], currentTables = [];
+        // API configuration - Groq key is now in backend environment variables
+        const GROQ_API_URL = 'https://api.groq.com/openai/v1/chat/completions';
+        const API_BASE = 'https://audit-1-qffa.onrender.com';
 
-        const $ = id => document.getElementById(id);
-        const connectScreen = $('connectScreen'), mainInterface = $('mainInterface');
-        const projectUrlInput = $('projectUrlInput'), anonKeyInput = $('anonKeyInput');
-        const connectBtn = $('connectBtn'), connectError = $('connectError');
-        const dbName = $('dbName'), tableList = $('tableList');
-        const findingsContainer = $('findingsContainer'), commandInput = $('commandInput');
-        const auditBtn = $('auditBtn'), auditSummary = $('auditSummary');
+        const connectBtn = document.getElementById('connectBtn');
+        const connectionModal = document.getElementById('connectionModal');
+        const modalClose = document.getElementById('modalClose');
+        const connectionTabs = document.querySelectorAll('.connection-tab');
+        const tabContents = document.querySelectorAll('.tab-content');
+        const dbTypeBtns = document.querySelectorAll('.db-type-btn');
+        const queryInput = document.getElementById('queryInput');
+        const submitBtn = document.getElementById('submitBtn');
+        const connectionUrlInput = document.getElementById('connectionUrl');
+        const dbPortInput = document.getElementById('dbPort');
+        const dbHostInput = document.getElementById('dbHost');
+        const dbNameInput = document.getElementById('dbName');
+        const dbUserInput = document.getElementById('dbUser');
+        const dbPasswordInput = document.getElementById('dbPassword');
+        const responseArea = document.getElementById('responseArea');
+        const mainElement = document.querySelector('main');
+        const connectSubmitBtn = document.getElementById('connectSubmit');
+        const connectionError = document.getElementById('connectionError');
 
-        connectBtn.onclick = connect;
-        projectUrlInput.onkeypress = e => e.key === 'Enter' && anonKeyInput.focus();
-        anonKeyInput.onkeypress = e => e.key === 'Enter' && connect();
+        let isConnected = false;
+        let connectionId = null;
+        let selectedDbType = 'postgresql';
+        let dbSchema = [];
+        let activeTab = 'url';
+        let conversationMode = false;
 
-        async function connect() {
-            const projectUrl = projectUrlInput.value.trim(), anonKey = anonKeyInput.value.trim();
-            if (!projectUrl || !anonKey) { connectError.textContent = 'Both fields are required'; return; }
-            connectBtn.disabled = true; connectBtn.textContent = 'Connecting...'; connectError.textContent = '';
-            try {
-                const res = await fetch(`${API_BASE}/api/connect`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ projectUrl, anonKey }) });
-                const data = await res.json();
-                if (!data.success) throw new Error(data.error);
-                connectBtn.textContent = 'Loading schema...';
-                const schemaRes = await fetch(`${API_BASE}/api/schema`);
-                const schemaData = await schemaRes.json();
-                if (schemaData.error) throw new Error(schemaData.error);
-                currentTables = schemaData.tables;
-                connectScreen.classList.add('hidden'); mainInterface.classList.add('active');
-                dbName.textContent = data.projectName; renderTables();
-            } catch (e) { connectError.textContent = e.message; connectBtn.disabled = false; connectBtn.textContent = 'Connect'; }
-        }
+        connectBtn.addEventListener('click', () => {
+            connectionModal.classList.add('active');
+        });
 
-        function renderTables() {
-            if (!currentTables.length) { tableList.innerHTML = '<li style="padding:1rem 1.5rem;color:var(--muted);font-size:0.8125rem;">No accessible tables</li>'; return; }
-            tableList.innerHTML = currentTables.map(t => `<li class="table-item" data-table="${t.name}"><span class="status-dot ${t.status}"></span><div class="table-info"><span class="table-name">${t.name}</span><span class="table-meta">${t.rowCount.toLocaleString()} rows · ${t.columns.length} cols</span></div></li>`).join('');
-            document.querySelectorAll('.table-item').forEach(item => item.onclick = () => { document.querySelectorAll('.table-item').forEach(i => i.classList.remove('active')); item.classList.add('active'); filterFindings(item.dataset.table); });
-        }
+        modalClose.addEventListener('click', () => {
+            connectionModal.classList.remove('active');
+            connectionError.textContent = '';
+        });
 
-        auditBtn.onclick = async () => {
-            auditBtn.disabled = true; auditBtn.textContent = 'Analyzing...';
-            findingsContainer.innerHTML = '<div class="empty-state"><p class="streaming">Scanning tables</p></div>';
-            try {
-                const res = await fetch(`${API_BASE}/api/audit`, { method: 'POST', headers: { 'Content-Type': 'application/json' } });
-                const data = await res.json();
-                if (data.error) throw new Error(data.error);
-                currentFindings = data.findings; currentTables = data.tables;
-                renderTables(); renderFindings();
-                $('totalFindings').textContent = data.summary.totalFindings;
-                $('criticalCount').textContent = data.summary.criticalCount;
-                $('tablesScanned').textContent = data.summary.tablesScanned;
-                auditSummary.style.display = 'block';
-            } catch (e) { findingsContainer.innerHTML = `<div class="empty-state"><p style="color:var(--critical);">Audit failed: ${e.message}</p></div>`; }
-            finally { auditBtn.disabled = false; auditBtn.textContent = 'Run Audit'; }
-        };
-
-        function renderFindings(findings = currentFindings) {
-            if (!findings.length) { findingsContainer.innerHTML = '<div class="empty-state"><p>No issues found.</p><p style="font-size:0.8125rem;">Your data looks clean!</p></div>'; return; }
-            findingsContainer.innerHTML = findings.map((f,i) => `<div class="finding-card" data-index="${i}"><div class="finding-header"><span class="finding-severity ${f.severity}">${f.severity}</span><span class="finding-location">${f.table}.${f.column}</span><span class="finding-type">${f.type.replace(/_/g,' ')}</span></div><p class="finding-summary">${f.summary}</p><div class="finding-details"><p class="loading-details streaming">Loading analysis</p></div></div>`).join('');
-            document.querySelectorAll('.finding-card').forEach((card,idx) => card.onclick = async () => { const wasExpanded = card.classList.contains('expanded'); card.classList.toggle('expanded'); if (!wasExpanded && !card.dataset.loaded) await loadDetails(card, findings[idx]); });
-        }
-
-        async function loadDetails(card, finding) {
-            try {
-                const res = await fetch(`${API_BASE}/api/analyze`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ finding }) });
-                const data = await res.json();
-                if (data.error) throw new Error(data.error);
-                card.querySelector('.finding-details').innerHTML = `${data.analysis.analysis ? `<p class="finding-analysis">${data.analysis.analysis}</p>` : ''}${data.analysis.impact ? `<p class="finding-analysis"><strong>Impact:</strong> ${data.analysis.impact}</p>` : ''}${data.sampleData?.length ? `<div class="fix-label">Sample Data</div><pre class="finding-sample">${formatSample(data.sampleData)}</pre>` : ''}<div class="finding-fix"><div class="fix-label">Recommended Fix</div><p>${data.analysis.fix || 'Review data and apply constraints.'}</p></div>`;
-                card.dataset.loaded = 'true';
-            } catch (e) { card.querySelector('.finding-details').innerHTML = `<p style="color:var(--critical);">Failed: ${e.message}</p>`; }
-        }
-
-        function formatSample(rows) {
-            if (!rows?.length) return 'No sample data';
-            const cols = Object.keys(rows[0]);
-            const widths = cols.map(c => Math.min(25, Math.max(c.length, ...rows.map(r => String(r[c] ?? 'NULL').slice(0,25).length))));
-            const header = cols.map((c,i) => c.slice(0,25).padEnd(widths[i])).join(' │ ');
-            const sep = widths.map(w => '─'.repeat(w)).join('─┼─');
-            const data = rows.map(r => cols.map((c,i) => String(r[c] ?? 'NULL').slice(0,25).padEnd(widths[i])).join(' │ ')).join('\n');
-            return `${header}\n${sep}\n${data}`;
-        }
-
-        function filterFindings(table) {
-            const filtered = currentFindings.filter(f => f.table === table);
-            renderFindings(filtered);
-            $('totalFindings').textContent = filtered.length;
-            $('criticalCount').textContent = filtered.filter(f => f.severity === 'critical').length;
-        }
-
-        commandInput.onkeypress = async e => {
-            if (e.key === 'Enter' && commandInput.value.trim()) {
-                const query = commandInput.value.trim(); commandInput.value = '';
-                const el = document.createElement('div'); el.className = 'ai-response';
-                el.innerHTML = `<div class="ai-response-header"><span class="ai-response-label">AI Insight</span><span class="ai-response-query">${query}</span></div><p class="ai-response-content streaming">Thinking</p>`;
-                findingsContainer.insertBefore(el, findingsContainer.firstChild);
-                try {
-                    const res = await fetch(`${API_BASE}/api/query`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ query }) });
-                    const data = await res.json();
-                    if (data.error) throw new Error(data.error);
-                    el.querySelector('.ai-response-content').classList.remove('streaming');
-                    el.querySelector('.ai-response-content').textContent = data.response;
-                } catch (e) { el.querySelector('.ai-response-content').innerHTML = `<span style="color:var(--critical);">Error: ${e.message}</span>`; el.querySelector('.ai-response-content').classList.remove('streaming'); }
+        connectionModal.addEventListener('click', (e) => {
+            if (e.target === connectionModal) {
+                connectionModal.classList.remove('active');
+                connectionError.textContent = '';
             }
-        };
+        });
 
-        projectUrlInput.focus();
+        connectionTabs.forEach(tab => {
+            tab.addEventListener('click', () => {
+                activeTab = tab.dataset.tab;
+                connectionTabs.forEach(t => t.classList.remove('active'));
+                tab.classList.add('active');
+                tabContents.forEach(content => {
+                    content.classList.remove('active');
+                    if (content.id === `${activeTab}Tab`) {
+                        content.classList.add('active');
+                    }
+                });
+            });
+        });
+
+        dbTypeBtns.forEach(btn => {
+            btn.addEventListener('click', () => {
+                const parentContainer = btn.closest('.tab-content') || btn.closest('.modal-body');
+                const siblingBtns = parentContainer.querySelectorAll('.db-type-btn');
+                siblingBtns.forEach(b => b.classList.remove('active'));
+                btn.classList.add('active');
+                selectedDbType = btn.dataset.db;
+
+                const defaultPort = selectedDbType === 'postgresql' ? '5432' : '3306';
+                const placeholder = selectedDbType === 'postgresql' 
+                    ? 'postgresql://user:password@host:5432/database'
+                    : 'mysql://user:password@host:3306/database';
+                
+                dbPortInput.placeholder = defaultPort;
+                connectionUrlInput.placeholder = placeholder;
+            });
+        });
+
+        connectSubmitBtn.addEventListener('click', async () => {
+            connectionError.textContent = '';
+            connectSubmitBtn.disabled = true;
+            connectSubmitBtn.textContent = 'Connecting...';
+
+            try {
+                const payload = { dbType: selectedDbType };
+
+                if (activeTab === 'url') {
+                    payload.connectionUrl = connectionUrlInput.value.trim().replace(/\.+$/, '');
+                } else {
+                    payload.host = dbHostInput.value.trim().replace(/\.+$/, '');
+                    payload.port = dbPortInput.value || (selectedDbType === 'postgresql' ? 5432 : 3306);
+                    payload.database = dbNameInput.value.trim();
+                    payload.user = dbUserInput.value.trim();
+                    payload.password = dbPasswordInput.value;
+                }
+
+                const response = await fetch(`${API_BASE}/api/connect`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+
+                const data = await response.json();
+
+                if (data.success) {
+                    isConnected = true;
+                    connectionId = data.connectionId;
+                    dbSchema = data.schema;
+
+                    connectionModal.classList.remove('active');
+                    connectBtn.classList.add('connected');
+                    connectBtn.querySelector('span').textContent = 'Connected';
+                    submitBtn.disabled = !queryInput.value.trim();
+
+                    console.log('Connected! Schema:', dbSchema);
+                } else {
+                    connectionError.textContent = data.error || 'Connection failed';
+                }
+            } catch (error) {
+                console.error('Connection error:', error);
+                connectionError.textContent = 'Failed to connect. Is the server running?';
+            } finally {
+                connectSubmitBtn.disabled = false;
+                connectSubmitBtn.textContent = 'Connect';
+            }
+        });
+
+        queryInput.addEventListener('input', () => {
+            submitBtn.disabled = !queryInput.value.trim() || !isConnected;
+        });
+
+        queryInput.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault();
+                if (!submitBtn.disabled) {
+                    submitBtn.click();
+                }
+            }
+        });
+
+        async function generateSQL(userQuery, groqApiKey) {
+            let schemaContext = '';
+            if (dbSchema.length > 0) {
+                schemaContext = '\n\nDatabase schema:\n';
+                dbSchema.forEach(table => {
+                    schemaContext += `\nTable: ${table.table_name}\n`;
+                    table.columns.forEach(c => {
+                        const nullable = c.nullable === 'YES' ? 'nullable' : 'NOT NULL';
+                        schemaContext += `  - ${c.column} (${c.type}, ${nullable})\n`;
+                    });
+                });
+            }
+
+            const prompt = `You are a SQL expert. Convert the following natural language request into a SQL query for a ${selectedDbType} database.
+${schemaContext}
+User request: "${userQuery}"
+
+CRITICAL RULES:
+1. For INSERT queries, you MUST provide values for ALL NOT NULL columns
+2. Look at existing data in the database first if needed to understand patterns (use SELECT queries)
+3. Use realistic sample data when the user doesn't specify exact values
+4. For DELETE queries, use appropriate WHERE clauses to target specific rows
+5. Return ONLY the SQL query, no explanations, no markdown, no backticks
+
+Respond with ONLY the raw SQL query.`;
+
+            const response = await fetch(GROQ_API_URL, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${groqApiKey}`
+                },
+                body: JSON.stringify({
+                    model: 'llama-3.3-70b-versatile',
+                    messages: [{ role: 'user', content: prompt }],
+                    temperature: 0.3,
+                    max_tokens: 1024
+                })
+            });
+
+            const data = await response.json();
+
+            if (data.error) {
+                throw new Error(data.error.message || 'API error');
+            }
+
+            if (!data.choices || !data.choices[0]) {
+                throw new Error('No response from API');
+            }
+
+            return data.choices[0].message.content.trim();
+        }
+
+        async function executeSQL(sql) {
+            const response = await fetch(`${API_BASE}/api/execute`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ connectionId, sql })
+            });
+
+            const data = await response.json();
+
+            if (!data.success) {
+                throw new Error(data.error || 'Execution failed');
+            }
+
+            return data.result;
+        }
+
+        async function generateConversationalResponse(userQuery, result, groqApiKey) {
+            const resultSummary = {
+                rowCount: result.rowCount,
+                rows: result.rows.slice(0, 50),
+                fields: result.fields
+            };
+
+            const prompt = `You are a helpful data analyst. The user asked: "${userQuery}"
+
+The SQL query returned ${result.rowCount} row(s).
+
+Here is the data (showing up to 50 rows):
+${JSON.stringify(resultSummary.rows, null, 2)}
+
+IMPORTANT RULES:
+1. For INSERT, UPDATE, or DELETE operations: Give a ONE SENTENCE confirmation only. Example: "Successfully added 1 user to the waitlist." or "Updated 3 records in the products table."
+2. For SELECT queries: Provide a natural, conversational response with the actual data and any interesting insights.
+3. Always be concise and direct.
+4. Format your response in plain text paragraphs, not as a list or table.`;
+
+            const response = await fetch(GROQ_API_URL, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${groqApiKey}`
+                },
+                body: JSON.stringify({
+                    model: 'llama-3.3-70b-versatile',
+                    messages: [{ role: 'user', content: prompt }],
+                    temperature: 0.7,
+                    max_tokens: 2048
+                })
+            });
+
+            const data = await response.json();
+
+            if (data.error) {
+                throw new Error(data.error.message || 'API error');
+            }
+
+            if (!data.choices || !data.choices[0]) {
+                throw new Error('No response from API');
+            }
+
+            return data.choices[0].message.content.trim();
+        }
+
+        async function getGroqApiKey() {
+            try {
+                const response = await fetch(`${API_BASE}/api/groq-key`);
+                const data = await response.json();
+                if (data.apiKey) {
+                    return data.apiKey;
+                }
+                throw new Error('API key not configured on server');
+            } catch (error) {
+                console.error('Failed to get Groq API key:', error);
+                throw new Error('Server configuration error');
+            }
+        }
+
+        async function handleSubmit() {
+            const userQuery = queryInput.value.trim();
+            if (!userQuery || !isConnected) return;
+
+            mainElement.classList.add('query-active');
+            responseArea.classList.add('active');
+            conversationMode = true;
+
+            queryInput.disabled = true;
+            submitBtn.disabled = true;
+            submitBtn.textContent = 'Processing...';
+
+            const entryDiv = document.createElement('div');
+            entryDiv.className = 'conversation-entry';
+            
+            const queryDiv = document.createElement('div');
+            queryDiv.className = 'user-query';
+            queryDiv.textContent = userQuery;
+            
+            const sqlPreviewDiv = document.createElement('div');
+            sqlPreviewDiv.className = 'sql-preview';
+            sqlPreviewDiv.innerHTML = `
+                <div class="sql-preview-label">Generated SQL</div>
+                <div class="sql-code loading">Generating...</div>
+            `;
+            
+            const actionsDiv = document.createElement('div');
+            actionsDiv.className = 'response-actions hidden';
+            actionsDiv.innerHTML = `
+                <button class="btn-confirm">Execute Query</button>
+                <button class="btn-cancel">Cancel</button>
+            `;
+            
+            const responseDiv = document.createElement('div');
+            responseDiv.className = 'conversational-response';
+            responseDiv.style.display = 'none';
+            
+            entryDiv.appendChild(queryDiv);
+            entryDiv.appendChild(sqlPreviewDiv);
+            entryDiv.appendChild(actionsDiv);
+            entryDiv.appendChild(responseDiv);
+            responseArea.appendChild(entryDiv);
+            
+            responseArea.scrollTop = responseArea.scrollHeight;
+
+            let generatedSQL = '';
+            
+            try {
+                const groqApiKey = await getGroqApiKey();
+                generatedSQL = await generateSQL(userQuery, groqApiKey);
+                const sqlCodeElement = sqlPreviewDiv.querySelector('.sql-code');
+                sqlCodeElement.textContent = generatedSQL;
+                sqlCodeElement.className = 'sql-code';
+                actionsDiv.classList.remove('hidden');
+                
+                queryInput.value = '';
+                queryInput.disabled = false;
+                queryInput.focus();
+                submitBtn.disabled = false;
+                submitBtn.textContent = 'Run Query';
+                
+                responseArea.scrollTop = responseArea.scrollHeight;
+                
+                const executeBtn = actionsDiv.querySelector('.btn-confirm');
+                const cancelBtn = actionsDiv.querySelector('.btn-cancel');
+                
+                executeBtn.addEventListener('click', async () => {
+                    executeBtn.disabled = true;
+                    executeBtn.textContent = 'Executing...';
+                    responseDiv.style.display = 'block';
+                    responseDiv.className = 'conversational-response loading';
+                    responseDiv.textContent = 'Processing results...';
+                    
+                    try {
+                        const result = await executeSQL(generatedSQL);
+                        const conversationalText = await generateConversationalResponse(userQuery, result, groqApiKey);
+                        responseDiv.textContent = conversationalText;
+                        responseDiv.className = 'conversational-response';
+                        
+                        actionsDiv.remove();
+                        
+                        responseArea.scrollTop = responseArea.scrollHeight;
+                    } catch (error) {
+                        console.error('Execution error:', error);
+                        responseDiv.textContent = `Error: ${error.message}`;
+                        responseDiv.className = 'conversational-response error';
+                        executeBtn.disabled = false;
+                        executeBtn.textContent = 'Retry';
+                        executeBtn.style.background = '#ef4444';
+                    }
+                });
+                
+                cancelBtn.addEventListener('click', () => {
+                    entryDiv.remove();
+                    if (responseArea.children.length === 0) {
+                        responseArea.classList.remove('active');
+                        mainElement.classList.remove('query-active');
+                    }
+                });
+                
+            } catch (error) {
+                console.error('SQL generation error:', error);
+                const sqlCodeElement = sqlPreviewDiv.querySelector('.sql-code');
+                sqlCodeElement.textContent = `Error: ${error.message}`;
+                sqlCodeElement.className = 'sql-code error';
+                
+                queryInput.disabled = false;
+                submitBtn.disabled = false;
+                submitBtn.textContent = 'Run Query';
+            }
+        }
+
+        submitBtn.addEventListener('click', handleSubmit);
     </script>
 </body>
 </html>
