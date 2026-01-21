@@ -1,443 +1,444 @@
 const express = require('express');
 const cors = require('cors');
+const path = require('path');
+const { Pool } = require('pg');
+const mysql = require('mysql2/promise');
 
 const app = express();
+const PORT = process.env.PORT || 3000;
+
 app.use(cors());
 app.use(express.json());
+app.use(express.static(__dirname));
 
-const GROQ_API_KEY = process.env.GROQ_API_KEY;
-const GROQ_API_URL = 'https://api.groq.com/openai/v1/chat/completions';
+// Serve index.html for root path
+app.get('/', (req, res) => {
+    res.sendFile(path.join(__dirname, 'index.html'));
+});
 
-let supabaseUrl = null;
-let supabaseKey = null;
-let cachedSchema = null;
-let cachedFindings = [];
+// Store active connections
+const connections = new Map();
 
-async function supabaseFetch(endpoint, options = {}) {
-    const response = await fetch(`${supabaseUrl}${endpoint}`, {
-        ...options,
-        headers: {
-            'apikey': supabaseKey,
-            'Authorization': `Bearer ${supabaseKey}`,
-            'Content-Type': 'application/json',
-            'Prefer': options.prefer || 'return=representation',
-            ...options.headers
-        }
-    });
-    return response;
+// Generate connection ID
+function generateConnectionId() {
+    return Math.random().toString(36).substring(2, 15);
 }
 
-// Connect using Supabase URL and anon key
+// Parse connection URL
+function parseConnectionUrl(url, dbType) {
+    try {
+        const parsed = new URL(url);
+        return {
+            host: parsed.hostname,
+            port: parsed.port || (dbType === 'postgresql' ? 5432 : 3306),
+            database: parsed.pathname.slice(1),
+            user: parsed.username,
+            password: parsed.password
+        };
+    } catch (error) {
+        throw new Error('Invalid connection URL format');
+    }
+}
+
+// Helper function to get schema
+async function getConnectionSchema(connection) {
+    if (connection.type === 'postgresql') {
+        const result = await connection.pool.query(`
+            SELECT 
+                t.table_name,
+                array_agg(
+                    json_build_object(
+                        'column', c.column_name,
+                        'type', c.data_type,
+                        'nullable', c.is_nullable
+                    )
+                ) as columns
+            FROM information_schema.tables t
+            JOIN information_schema.columns c 
+                ON t.table_name = c.table_name 
+                AND t.table_schema = c.table_schema
+            WHERE t.table_schema = 'public'
+                AND t.table_type = 'BASE TABLE'
+            GROUP BY t.table_name
+            ORDER BY t.table_name
+        `);
+        return result.rows;
+    } else if (connection.type === 'mysql') {
+        const [result] = await connection.pool.query(`
+            SELECT 
+                t.TABLE_NAME as table_name,
+                JSON_ARRAYAGG(
+                    JSON_OBJECT(
+                        'column', c.COLUMN_NAME,
+                        'type', c.DATA_TYPE,
+                        'nullable', c.IS_NULLABLE
+                    )
+                ) as columns
+            FROM information_schema.TABLES t
+            JOIN information_schema.COLUMNS c 
+                ON t.TABLE_NAME = c.TABLE_NAME 
+                AND t.TABLE_SCHEMA = c.TABLE_SCHEMA
+            WHERE t.TABLE_SCHEMA = DATABASE()
+                AND t.TABLE_TYPE = 'BASE TABLE'
+            GROUP BY t.TABLE_NAME
+            ORDER BY t.TABLE_NAME
+        `);
+        return result;
+    }
+    return [];
+}
+
+// Connect to database
 app.post('/api/connect', async (req, res) => {
-    const { projectUrl, anonKey } = req.body;
-    
-    try {
-        // Normalize URL
-        let url = projectUrl.trim();
-        if (!url.startsWith('http')) {
-            url = `https://${url}`;
-        }
-        if (!url.includes('.supabase.co')) {
-            url = `https://${url}.supabase.co`;
-        }
-        url = url.replace(/\/$/, '');
-        
-        supabaseUrl = `${url}/rest/v1`;
-        supabaseKey = anonKey.trim();
-        
-        // Test connection by fetching OpenAPI spec
-        const testResponse = await fetch(`${url}/rest/v1/`, {
-            headers: {
-                'apikey': supabaseKey,
-                'Authorization': `Bearer ${supabaseKey}`
-            }
-        });
-        
-        if (!testResponse.ok) {
-            throw new Error('Invalid credentials or project URL');
-        }
-        
-        // Extract project name from URL
-        const projectName = url.match(/https?:\/\/([^.]+)/)?.[1] || 'project';
-        
-        cachedSchema = null;
-        cachedFindings = [];
-        
-        res.json({ success: true, projectName });
-    } catch (error) {
-        res.status(500).json({ success: false, error: error.message });
-    }
-});
+    const { dbType, connectionUrl, host, port, database, user, password } = req.body;
 
-// Get schema from Supabase OpenAPI spec
-app.get('/api/schema', async (req, res) => {
-    if (!supabaseUrl || !supabaseKey) {
-        return res.status(400).json({ error: 'No project connected' });
-    }
-    
     try {
-        // Get OpenAPI spec which contains table definitions
-        const specResponse = await fetch(supabaseUrl.replace('/rest/v1', '/rest/v1/'), {
-            headers: {
-                'apikey': supabaseKey,
-                'Authorization': `Bearer ${supabaseKey}`
-            }
-        });
-        
-        const spec = await specResponse.json();
-        const tables = [];
-        
-        // Parse definitions from OpenAPI spec
-        if (spec.definitions) {
-            for (const [tableName, definition] of Object.entries(spec.definitions)) {
-                // Skip internal tables
-                if (tableName.startsWith('_') || tableName.includes('.')) continue;
-                
-                const columns = [];
-                if (definition.properties) {
-                    for (const [colName, colDef] of Object.entries(definition.properties)) {
-                        columns.push({
-                            column_name: colName,
-                            data_type: colDef.format || colDef.type || 'unknown',
-                            description: colDef.description || null
-                        });
-                    }
-                }
-                
-                // Get row count
-                let rowCount = 0;
-                try {
-                    const countResponse = await supabaseFetch(`/${tableName}?select=count`, {
-                        headers: { 'Prefer': 'count=exact' }
-                    });
-                    const countHeader = countResponse.headers.get('content-range');
-                    if (countHeader) {
-                        const match = countHeader.match(/\/(\d+)/);
-                        rowCount = match ? parseInt(match[1]) : 0;
-                    }
-                } catch (e) {
-                    // Table might not be accessible
-                }
-                
-                tables.push({
-                    name: tableName,
-                    columns,
-                    rowCount,
-                    status: 'clean'
-                });
-            }
-        }
-        
-        cachedSchema = tables.filter(t => t.columns.length > 0);
-        res.json({ tables: cachedSchema });
-    } catch (error) {
-        res.status(500).json({ error: error.message });
-    }
-});
+        let config;
 
-// Run audit
-app.post('/api/audit', async (req, res) => {
-    if (!supabaseUrl || !supabaseKey || !cachedSchema) {
-        return res.status(400).json({ error: 'No project connected or schema not loaded' });
-    }
-    
-    try {
-        const findings = [];
-        
-        for (const table of cachedSchema) {
-            if (table.rowCount === 0) continue;
-            
-            // Fetch sample data to analyze
-            const sampleResponse = await supabaseFetch(`/${table.name}?limit=1000`);
-            if (!sampleResponse.ok) continue;
-            
-            const rows = await sampleResponse.json();
-            if (!rows || rows.length === 0) continue;
-            
-            for (const column of table.columns) {
-                const colName = column.column_name;
-                const values = rows.map(r => r[colName]);
-                
-                // Check NULL rate
-                const nullCount = values.filter(v => v === null || v === undefined).length;
-                const nullRate = (nullCount / values.length) * 100;
-                
-                if (nullRate > 10) {
-                    findings.push({
-                        severity: nullRate > 30 ? 'critical' : 'warning',
-                        table: table.name,
-                        column: colName,
-                        type: 'null_rate',
-                        summary: `${nullRate.toFixed(1)}% NULL rate detected (${nullCount} of ${values.length} sampled rows).`,
-                        stats: { nullCount, total: values.length, nullRate }
-                    });
-                }
-                
-                // Check duplicates for string columns
-                const nonNullValues = values.filter(v => v !== null && v !== undefined);
-                if (typeof nonNullValues[0] === 'string' && nonNullValues.length > 10) {
-                    const counts = {};
-                    nonNullValues.forEach(v => { counts[v] = (counts[v] || 0) + 1; });
-                    
-                    const duplicates = Object.entries(counts)
-                        .filter(([_, count]) => count > 1)
-                        .sort((a, b) => b[1] - a[1]);
-                    
-                    const totalDuplicates = duplicates.reduce((sum, [_, c]) => sum + c - 1, 0);
-                    
-                    if (totalDuplicates > 5 && duplicates.length > 0) {
-                        findings.push({
-                            severity: totalDuplicates > 50 ? 'critical' : 'warning',
-                            table: table.name,
-                            column: colName,
-                            type: 'duplicates',
-                            summary: `${totalDuplicates} duplicate values across ${duplicates.length} distinct values.`,
-                            samples: duplicates.slice(0, 5).map(([val, count]) => ({ value: val, count })),
-                            stats: { totalDuplicates, distinctDuplicates: duplicates.length }
-                        });
-                    }
-                }
-                
-                // Check numeric anomalies
-                const numericValues = nonNullValues.filter(v => typeof v === 'number');
-                if (numericValues.length > 10) {
-                    // Negative values check
-                    const negativeCount = numericValues.filter(v => v < 0).length;
-                    if (negativeCount > 0 && (colName.includes('amount') || colName.includes('price') || 
-                        colName.includes('quantity') || colName.includes('count') || colName.includes('total'))) {
-                        findings.push({
-                            severity: 'warning',
-                            table: table.name,
-                            column: colName,
-                            type: 'negative_values',
-                            summary: `${negativeCount} negative values in column that typically should be positive.`,
-                            stats: { 
-                                negativeCount, 
-                                total: numericValues.length,
-                                min: Math.min(...numericValues),
-                                max: Math.max(...numericValues)
-                            }
-                        });
-                    }
-                    
-                    // Outlier detection using IQR
-                    const sorted = [...numericValues].sort((a, b) => a - b);
-                    const q1 = sorted[Math.floor(sorted.length * 0.25)];
-                    const q3 = sorted[Math.floor(sorted.length * 0.75)];
-                    const iqr = q3 - q1;
-                    const lowerBound = q1 - 1.5 * iqr;
-                    const upperBound = q3 + 1.5 * iqr;
-                    
-                    const outliers = numericValues.filter(v => v < lowerBound || v > upperBound);
-                    const outlierRate = (outliers.length / numericValues.length) * 100;
-                    
-                    if (outlierRate > 2 && outliers.length > 5) {
-                        findings.push({
-                            severity: outlierRate > 10 ? 'critical' : 'warning',
-                            table: table.name,
-                            column: colName,
-                            type: 'outliers',
-                            summary: `${outliers.length} statistical outliers detected (${outlierRate.toFixed(1)}% of data).`,
-                            stats: { 
-                                outlierCount: outliers.length, 
-                                total: numericValues.length,
-                                bounds: { lower: lowerBound, upper: upperBound }
-                            }
-                        });
-                    }
-                }
-                
-                // Check for empty strings
-                if (typeof nonNullValues[0] === 'string') {
-                    const emptyCount = nonNullValues.filter(v => v.trim() === '').length;
-                    const emptyRate = (emptyCount / values.length) * 100;
-                    
-                    if (emptyRate > 5) {
-                        findings.push({
-                            severity: emptyRate > 20 ? 'critical' : 'warning',
-                            table: table.name,
-                            column: colName,
-                            type: 'empty_strings',
-                            summary: `${emptyRate.toFixed(1)}% empty strings detected (${emptyCount} rows).`,
-                            stats: { emptyCount, total: values.length, emptyRate }
-                        });
-                    }
-                }
-            }
+        if (connectionUrl) {
+            config = parseConnectionUrl(connectionUrl, dbType);
+        } else {
+            config = { host, port, database, user, password };
         }
-        
-        // Update table statuses
-        for (const table of cachedSchema) {
-            const tableFindings = findings.filter(f => f.table === table.name);
-            const hasCritical = tableFindings.some(f => f.severity === 'critical');
-            const hasWarning = tableFindings.some(f => f.severity === 'warning');
-            table.status = hasCritical ? 'critical' : hasWarning ? 'warning' : 'clean';
+
+        let connection;
+        let schema = [];
+
+        if (dbType === 'postgresql') {
+            const pool = new Pool({
+                host: config.host,
+                port: config.port,
+                database: config.database,
+                user: config.user,
+                password: config.password,
+                max: 5,
+                idleTimeoutMillis: 30000,
+                connectionTimeoutMillis: 5000
+            });
+
+            const client = await pool.connect();
+            client.release();
+
+            const schemaResult = await pool.query(`
+                SELECT 
+                    t.table_name,
+                    array_agg(
+                        json_build_object(
+                            'column', c.column_name,
+                            'type', c.data_type,
+                            'nullable', c.is_nullable
+                        )
+                    ) as columns
+                FROM information_schema.tables t
+                JOIN information_schema.columns c 
+                    ON t.table_name = c.table_name 
+                    AND t.table_schema = c.table_schema
+                WHERE t.table_schema = 'public'
+                    AND t.table_type = 'BASE TABLE'
+                GROUP BY t.table_name
+                ORDER BY t.table_name
+            `);
+
+            schema = schemaResult.rows;
+            connection = { type: 'postgresql', pool };
+
+        } else if (dbType === 'mysql') {
+            const pool = mysql.createPool({
+                host: config.host,
+                port: config.port,
+                database: config.database,
+                user: config.user,
+                password: config.password,
+                waitForConnections: true,
+                connectionLimit: 5,
+                queueLimit: 0
+            });
+
+            const testConn = await pool.getConnection();
+            testConn.release();
+
+            const [schemaResult] = await pool.query(`
+                SELECT 
+                    t.TABLE_NAME as table_name,
+                    JSON_ARRAYAGG(
+                        JSON_OBJECT(
+                            'column', c.COLUMN_NAME,
+                            'type', c.DATA_TYPE,
+                            'nullable', c.IS_NULLABLE
+                        )
+                    ) as columns
+                FROM information_schema.TABLES t
+                JOIN information_schema.COLUMNS c 
+                    ON t.TABLE_NAME = c.TABLE_NAME 
+                    AND t.TABLE_SCHEMA = c.TABLE_SCHEMA
+                WHERE t.TABLE_SCHEMA = ?
+                    AND t.TABLE_TYPE = 'BASE TABLE'
+                GROUP BY t.TABLE_NAME
+                ORDER BY t.TABLE_NAME
+            `, [config.database]);
+
+            schema = schemaResult;
+            connection = { type: 'mysql', pool };
+        } else {
+            return res.status(400).json({ error: 'Unsupported database type' });
         }
-        
-        cachedFindings = findings;
-        
+
+        const connectionId = generateConnectionId();
+        connections.set(connectionId, connection);
+
         res.json({
-            findings,
-            tables: cachedSchema,
-            summary: {
-                totalFindings: findings.length,
-                criticalCount: findings.filter(f => f.severity === 'critical').length,
-                warningCount: findings.filter(f => f.severity === 'warning').length,
-                tablesScanned: cachedSchema.length
-            }
+            success: true,
+            connectionId,
+            schema,
+            message: `Connected to ${dbType} database successfully`
         });
+
     } catch (error) {
-        res.status(500).json({ error: error.message });
+        console.error('Connection error:', error);
+        res.status(500).json({
+            success: false,
+            error: error.message || 'Failed to connect to database'
+        });
     }
 });
 
-// Get detailed analysis for a finding
-app.post('/api/analyze', async (req, res) => {
-    if (!supabaseUrl || !supabaseKey) {
-        return res.status(400).json({ error: 'No project connected' });
+// Get schema
+app.get('/api/schema/:connectionId', async (req, res) => {
+    const { connectionId } = req.params;
+    const connection = connections.get(connectionId);
+
+    if (!connection) {
+        return res.status(404).json({ error: 'Connection not found' });
     }
-    
-    const { finding } = req.body;
-    
+
     try {
-        // Fetch sample data for this specific issue
-        let sampleData = [];
-        const sampleResponse = await supabaseFetch(`/${finding.table}?limit=100`);
-        
-        if (sampleResponse.ok) {
-            const allRows = await sampleResponse.json();
-            
-            switch (finding.type) {
-                case 'null_rate':
-                    sampleData = allRows.filter(r => r[finding.column] === null).slice(0, 10);
-                    break;
-                case 'duplicates':
-                    if (finding.samples && finding.samples[0]) {
-                        const dupValue = finding.samples[0].value;
-                        sampleData = allRows.filter(r => r[finding.column] === dupValue).slice(0, 10);
-                    }
-                    break;
-                case 'negative_values':
-                    sampleData = allRows.filter(r => r[finding.column] < 0).slice(0, 10);
-                    break;
-                case 'outliers':
-                    const { lower, upper } = finding.stats.bounds;
-                    sampleData = allRows.filter(r => {
-                        const v = r[finding.column];
-                        return v !== null && (v < lower || v > upper);
-                    }).slice(0, 10);
-                    break;
-                case 'empty_strings':
-                    sampleData = allRows.filter(r => r[finding.column]?.trim?.() === '').slice(0, 10);
-                    break;
-                default:
-                    sampleData = allRows.slice(0, 10);
-            }
-        }
-        
-        // Get AI analysis
-        const aiPrompt = `You are a database quality analyst. Analyze this finding and provide:
-1. Root cause analysis (2-3 sentences)
-2. Business impact (1-2 sentences)  
-3. Recommended fix (1-2 sentences)
+        const schema = await getConnectionSchema(connection);
+        res.json({ success: true, schema });
 
-Finding: ${finding.summary}
-Table: ${finding.table}
-Column: ${finding.column}
-Type: ${finding.type}
-Stats: ${JSON.stringify(finding.stats)}
-Sample: ${JSON.stringify(sampleData.slice(0, 3))}
+    } catch (error) {
+        console.error('Schema fetch error:', error);
+        res.status(500).json({ error: 'Failed to fetch schema' });
+    }
+});
 
-Respond in JSON: {"analysis": "...", "impact": "...", "fix": "..."}`;
+// Execute SQL
+app.post('/api/execute', async (req, res) => {
+    const { connectionId, sql } = req.body;
+    const connection = connections.get(connectionId);
 
-        const aiResponse = await fetch(GROQ_API_URL, {
-            method: 'POST',
-            headers: {
-                'Authorization': `Bearer ${GROQ_API_KEY}`,
-                'Content-Type': 'application/json'
-            },
-            body: JSON.stringify({
-                model: 'llama-3.3-70b-versatile',
-                messages: [{ role: 'user', content: aiPrompt }],
-                max_tokens: 512,
-                temperature: 0.3
-            })
-        });
-        
-        const aiData = await aiResponse.json();
-        let analysis = { analysis: '', impact: '', fix: '' };
-        
-        try {
-            const content = aiData.choices[0].message.content;
-            const jsonMatch = content.match(/\{[\s\S]*\}/);
-            if (jsonMatch) {
-                analysis = JSON.parse(jsonMatch[0]);
-            }
-        } catch (e) {
-            analysis = { 
-                analysis: aiData.choices[0]?.message?.content || 'Unable to generate analysis',
-                impact: '',
-                fix: ''
+    if (!connection) {
+        return res.status(404).json({ error: 'Connection not found' });
+    }
+
+    if (!sql || !sql.trim()) {
+        return res.status(400).json({ error: 'No SQL provided' });
+    }
+
+    try {
+        let result;
+
+        if (connection.type === 'postgresql') {
+            const pgResult = await connection.pool.query(sql);
+            result = {
+                rows: pgResult.rows,
+                rowCount: pgResult.rowCount,
+                fields: pgResult.fields?.map(f => f.name) || []
+            };
+
+        } else if (connection.type === 'mysql') {
+            const [rows, fields] = await connection.pool.query(sql);
+            result = {
+                rows: Array.isArray(rows) ? rows : [],
+                rowCount: Array.isArray(rows) ? rows.length : rows.affectedRows,
+                fields: fields?.map(f => f.name) || []
             };
         }
-        
-        res.json({ finding, sampleData, analysis });
+
+        res.json({
+            success: true,
+            result
+        });
+
     } catch (error) {
-        res.status(500).json({ error: error.message });
+        console.error('Query execution error:', error);
+        res.status(500).json({
+            success: false,
+            error: error.message || 'Query execution failed'
+        });
     }
 });
 
-// Natural language query
-app.post('/api/query', async (req, res) => {
-    if (!supabaseUrl || !supabaseKey || !cachedSchema) {
-        return res.status(400).json({ error: 'No project connected' });
+// Generate SQL from natural language
+app.post('/api/generate-sql', async (req, res) => {
+    const { connectionId, userQuery, dbType } = req.body;
+    const connection = connections.get(connectionId);
+
+    if (!connection) {
+        return res.status(404).json({ 
+            success: false, 
+            error: 'Connection not found' 
+        });
     }
-    
-    const { query } = req.body;
-    
+
     try {
-        const schemaContext = cachedSchema.map(t => 
-            `${t.name} (${t.rowCount} rows): ${t.columns.map(c => c.column_name).join(', ')}`
-        ).join('\n');
+        const schemaResult = await getConnectionSchema(connection);
         
-        const aiPrompt = `You are a database analyst. Given the schema and audit findings, answer the user's question.
+        let schemaContext = '';
+        if (schemaResult.length > 0) {
+            schemaContext = '\n\nDatabase schema:\n';
+            schemaResult.forEach(table => {
+                schemaContext += `\nTable: ${table.table_name}\n`;
+                const columns = typeof table.columns === 'string' 
+                    ? JSON.parse(table.columns) 
+                    : table.columns;
+                columns.forEach(c => {
+                    const nullable = c.nullable === 'YES' ? 'nullable' : 'NOT NULL';
+                    schemaContext += `  - ${c.column} (${c.type}, ${nullable})\n`;
+                });
+            });
+        }
 
-Schema:
+        const prompt = `You are a SQL expert. Convert the following natural language request into a SQL query for a ${dbType || connection.type} database.
 ${schemaContext}
+User request: "${userQuery}"
 
-Audit findings:
-${JSON.stringify(cachedFindings.slice(0, 10))}
+CRITICAL RULES:
+1. For INSERT queries, you MUST provide values for ALL NOT NULL columns
+2. Look at existing data in the database first if needed to understand patterns (use SELECT queries)
+3. Use realistic sample data when the user doesn't specify exact values
+4. For DELETE queries, use appropriate WHERE clauses to target specific rows
+5. Return ONLY the SQL query, no explanations, no markdown, no backticks
 
-Question: ${query}
+Respond with ONLY the raw SQL query.`;
 
-Provide a helpful, concise response.`;
-
-        const aiResponse = await fetch(GROQ_API_URL, {
+        const groqResponse = await fetch('https://api.groq.com/openai/v1/chat/completions', {
             method: 'POST',
             headers: {
-                'Authorization': `Bearer ${GROQ_API_KEY}`,
-                'Content-Type': 'application/json'
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${process.env.GROQ_API_KEY}`
             },
             body: JSON.stringify({
                 model: 'llama-3.3-70b-versatile',
-                messages: [{ role: 'user', content: aiPrompt }],
-                max_tokens: 1024,
-                temperature: 0.7
+                messages: [{ role: 'user', content: prompt }],
+                temperature: 0.3,
+                max_tokens: 1024
             })
         });
-        
-        const aiData = await aiResponse.json();
-        const response = aiData.choices[0]?.message?.content || 'Unable to process query';
-        
-        res.json({ response });
+
+        const groqData = await groqResponse.json();
+
+        if (groqData.error) {
+            throw new Error(groqData.error.message || 'API error');
+        }
+
+        if (!groqData.choices || !groqData.choices[0]) {
+            throw new Error('No response from API');
+        }
+
+        const sql = groqData.choices[0].message.content.trim();
+
+        res.json({
+            success: true,
+            sql
+        });
+
     } catch (error) {
-        res.status(500).json({ error: error.message });
+        console.error('SQL generation error:', error);
+        res.status(500).json({
+            success: false,
+            error: error.message || 'Failed to generate SQL'
+        });
     }
 });
 
-app.use(express.static('public'));
+// Generate conversational response
+app.post('/api/generate-response', async (req, res) => {
+    const { connectionId, userQuery, result } = req.body;
+    const connection = connections.get(connectionId);
 
-const PORT = process.env.PORT || 3000;
+    if (!connection) {
+        return res.status(404).json({ 
+            success: false, 
+            error: 'Connection not found' 
+        });
+    }
+
+    try {
+        const prompt = `You are a helpful data analyst. The user asked: "${userQuery}"
+
+The SQL query returned ${result.rowCount} row(s).
+
+Here is the data (showing up to 50 rows):
+${JSON.stringify(result.rows, null, 2)}
+
+IMPORTANT RULES:
+1. For INSERT, UPDATE, or DELETE operations: Give a ONE SENTENCE confirmation only. Example: "Successfully added 1 user to the waitlist." or "Updated 3 records in the products table."
+2. For SELECT queries: Provide a natural, conversational response with the actual data and any interesting insights.
+3. Always be concise and direct.
+4. Format your response in plain text paragraphs, not as a list or table.`;
+
+        const groqResponse = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${process.env.GROQ_API_KEY}`
+            },
+            body: JSON.stringify({
+                model: 'llama-3.3-70b-versatile',
+                messages: [{ role: 'user', content: prompt }],
+                temperature: 0.7,
+                max_tokens: 2048
+            })
+        });
+
+        const groqData = await groqResponse.json();
+
+        if (groqData.error) {
+            throw new Error(groqData.error.message || 'API error');
+        }
+
+        if (!groqData.choices || !groqData.choices[0]) {
+            throw new Error('No response from API');
+        }
+
+        const response = groqData.choices[0].message.content.trim();
+
+        res.json({
+            success: true,
+            response
+        });
+
+    } catch (error) {
+        console.error('Response generation error:', error);
+        res.status(500).json({
+            success: false,
+            error: error.message || 'Failed to generate response'
+        });
+    }
+});
+
+// Disconnect
+app.post('/api/disconnect', async (req, res) => {
+    const { connectionId } = req.body;
+    const connection = connections.get(connectionId);
+
+    if (connection) {
+        try {
+            await connection.pool.end();
+            connections.delete(connectionId);
+        } catch (error) {
+            console.error('Disconnect error:', error);
+        }
+    }
+
+    res.json({ success: true });
+});
+
+// Health check
+app.get('/api/health', (req, res) => {
+    res.json({ status: 'ok', connections: connections.size });
+});
+
 app.listen(PORT, () => {
-    console.log(`Audit server running on http://localhost:${PORT}`);
+    console.log(`Gem server running on http://localhost:${PORT}`);
 });
