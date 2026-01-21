@@ -113,7 +113,11 @@ app.post('/api/connect', async (req, res) => {
                 password: config.password,
                 max: 5,
                 idleTimeoutMillis: 30000,
-                connectionTimeoutMillis: 5000
+                connectionTimeoutMillis: 5000,
+                ssl: {
+                    rejectUnauthorized: false
+                },
+                family: 4  // Force IPv4 to avoid IPv6 connection issues
             });
 
             const client = await pool.connect();
@@ -151,7 +155,10 @@ app.post('/api/connect', async (req, res) => {
                 password: config.password,
                 waitForConnections: true,
                 connectionLimit: 5,
-                queueLimit: 0
+                queueLimit: 0,
+                ssl: {
+                    rejectUnauthorized: false
+                }
             });
 
             const testConn = await pool.getConnection();
