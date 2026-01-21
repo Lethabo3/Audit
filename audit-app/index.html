@@ -713,6 +713,18 @@
                         </div>
                     </div>
                 </div>
+                <div class="tab-content active" id="supabaseTab">
+                    <div class="form-group">
+                        <label class="form-label">Project URL</label>
+                        <input type="text" class="form-input" id="supabaseUrl" 
+                               placeholder="https://xxxxx.supabase.co">
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">Anon Key</label>
+                        <input type="text" class="form-input" id="supabaseAnonKey" 
+                               placeholder="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...">
+                    </div>
+                </div>
 
                 <div class="connection-error" id="connectionError"></div>
             </div>
@@ -723,9 +735,7 @@
     </div>
 
     <script>
-        // API configuration - Groq key is now in backend environment variables
-        const GROQ_API_URL = 'https://api.groq.com/openai/v1/chat/completions';
-        const API_BASE = 'https://audit-1-qffa.onrender.com';
+        const API_BASE = window.location.origin;
 
         const connectBtn = document.getElementById('connectBtn');
         const connectionModal = document.getElementById('connectionModal');
@@ -768,6 +778,13 @@
                 connectionError.textContent = '';
             }
         });
+
+        // Add a third tab for Supabase
+const connectionTabsHTML = `
+    <button class="connection-tab active" data-tab="supabase">Supabase</button>
+    <button class="connection-tab" data-tab="url">Connection URL</button>
+    <button class="connection-tab" data-tab="manual">Manual</button>
+`;
 
         connectionTabs.forEach(tab => {
             tab.addEventListener('click', () => {
@@ -849,7 +866,78 @@
                 connectSubmitBtn.textContent = 'Connect';
             }
         });
+        connectSubmitBtn.addEventListener('click', async () => {
+    connectionError.textContent = '';
+    connectSubmitBtn.disabled = true;
+    connectSubmitBtn.textContent = 'Connecting...';
 
+    try {
+        const payload = {};
+
+        if (activeTab === 'supabase') {
+            const supabaseUrlInput = document.getElementById('supabaseUrl');
+            const supabaseAnonKeyInput = document.getElementById('supabaseAnonKey');
+            
+            if (!supabaseUrlInput.value.trim() || !supabaseAnonKeyInput.value.trim()) {
+                throw new Error('Please provide both Project URL and Anon Key');
+            }
+            
+            payload.type = 'supabase';
+            payload.supabaseUrl = supabaseUrlInput.value.trim();
+            payload.supabaseAnonKey = supabaseAnonKeyInput.value.trim();
+        } else if (activeTab === 'url') {
+            if (!connectionUrlInput.value.trim()) {
+                throw new Error('Please provide a connection URL');
+            }
+            
+            payload.type = 'direct';
+            payload.dbType = selectedDbType;
+            payload.connectionUrl = connectionUrlInput.value.trim().replace(/\.+$/, '');
+        } else {
+            if (!dbHostInput.value.trim() || !dbNameInput.value.trim() || 
+                !dbUserInput.value.trim() || !dbPasswordInput.value) {
+                throw new Error('Please fill in all required fields');
+            }
+            
+            payload.type = 'direct';
+            payload.dbType = selectedDbType;
+            payload.host = dbHostInput.value.trim().replace(/\.+$/, '');
+            payload.port = dbPortInput.value || (selectedDbType === 'postgresql' ? 5432 : 3306);
+            payload.database = dbNameInput.value.trim();
+            payload.user = dbUserInput.value.trim();
+            payload.password = dbPasswordInput.value;
+        }
+
+        const response = await fetch(`${API_BASE}/api/connect`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+        });
+
+        const data = await response.json();
+
+        if (data.success) {
+            isConnected = true;
+            connectionId = data.connectionId;
+            dbSchema = data.schema;
+
+            connectionModal.classList.remove('active');
+            connectBtn.classList.add('connected');
+            connectBtn.querySelector('span').textContent = 'Connected';
+            submitBtn.disabled = !queryInput.value.trim();
+
+            console.log('Connected! Schema:', dbSchema);
+        } else {
+            connectionError.textContent = data.error || 'Connection failed';
+        }
+    } catch (error) {
+        console.error('Connection error:', error);
+        connectionError.textContent = error.message || 'Failed to connect. Please check your credentials.';
+    } finally {
+        connectSubmitBtn.disabled = false;
+        connectSubmitBtn.textContent = 'Connect';
+    }
+});
         queryInput.addEventListener('input', () => {
             submitBtn.disabled = !queryInput.value.trim() || !isConnected;
         });
@@ -863,59 +951,25 @@
             }
         });
 
-        async function generateSQL(userQuery, groqApiKey) {
-            let schemaContext = '';
-            if (dbSchema.length > 0) {
-                schemaContext = '\n\nDatabase schema:\n';
-                dbSchema.forEach(table => {
-                    schemaContext += `\nTable: ${table.table_name}\n`;
-                    table.columns.forEach(c => {
-                        const nullable = c.nullable === 'YES' ? 'nullable' : 'NOT NULL';
-                        schemaContext += `  - ${c.column} (${c.type}, ${nullable})\n`;
-                    });
-                });
-            }
+        async function generateSQL(userQuery) {
+    const response = await fetch(`${API_BASE}/api/generate-sql`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+            connectionId,
+            userQuery,
+            dbType: selectedDbType
+        })
+    });
 
-            const prompt = `You are a SQL expert. Convert the following natural language request into a SQL query for a ${selectedDbType} database.
-${schemaContext}
-User request: "${userQuery}"
+    const data = await response.json();
 
-CRITICAL RULES:
-1. For INSERT queries, you MUST provide values for ALL NOT NULL columns
-2. Look at existing data in the database first if needed to understand patterns (use SELECT queries)
-3. Use realistic sample data when the user doesn't specify exact values
-4. For DELETE queries, use appropriate WHERE clauses to target specific rows
-5. Return ONLY the SQL query, no explanations, no markdown, no backticks
+    if (!data.success) {
+        throw new Error(data.error || 'Failed to generate SQL');
+    }
 
-Respond with ONLY the raw SQL query.`;
-
-            const response = await fetch(GROQ_API_URL, {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'Authorization': `Bearer ${groqApiKey}`
-                },
-                body: JSON.stringify({
-                    model: 'llama-3.3-70b-versatile',
-                    messages: [{ role: 'user', content: prompt }],
-                    temperature: 0.3,
-                    max_tokens: 1024
-                })
-            });
-
-            const data = await response.json();
-
-            if (data.error) {
-                throw new Error(data.error.message || 'API error');
-            }
-
-            if (!data.choices || !data.choices[0]) {
-                throw new Error('No response from API');
-            }
-
-            return data.choices[0].message.content.trim();
-        }
-
+    return data.sql;
+}
         async function executeSQL(sql) {
             const response = await fetch(`${API_BASE}/api/execute`, {
                 method: 'POST',
@@ -932,7 +986,7 @@ Respond with ONLY the raw SQL query.`;
             return data.result;
         }
 
-        async function generateConversationalResponse(userQuery, result, groqApiKey) {
+        async function generateConversationalResponse(userQuery, result) {
             const resultSummary = {
                 rowCount: result.rowCount,
                 rows: result.rows.slice(0, 50),
@@ -956,7 +1010,7 @@ IMPORTANT RULES:
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
-                    'Authorization': `Bearer ${groqApiKey}`
+                    'Authorization': `Bearer ${GROQ_API_KEY}`
                 },
                 body: JSON.stringify({
                     model: 'llama-3.3-70b-versatile',
@@ -978,21 +1032,29 @@ IMPORTANT RULES:
 
             return data.choices[0].message.content.trim();
         }
-
-        async function getGroqApiKey() {
-            try {
-                const response = await fetch(`${API_BASE}/api/groq-key`);
-                const data = await response.json();
-                if (data.apiKey) {
-                    return data.apiKey;
-                }
-                throw new Error('API key not configured on server');
-            } catch (error) {
-                console.error('Failed to get Groq API key:', error);
-                throw new Error('Server configuration error');
+        async function generateConversationalResponse(userQuery, result) {
+    const response = await fetch(`${API_BASE}/api/generate-response`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+            connectionId,
+            userQuery,
+            result: {
+                rowCount: result.rowCount,
+                rows: result.rows.slice(0, 50),
+                fields: result.fields
             }
-        }
+        })
+    });
 
+    const data = await response.json();
+
+    if (!data.success) {
+        throw new Error(data.error || 'Failed to generate response');
+    }
+
+    return data.response;
+}
         async function handleSubmit() {
             const userQuery = queryInput.value.trim();
             if (!userQuery || !isConnected) return;
@@ -1041,8 +1103,7 @@ IMPORTANT RULES:
             let generatedSQL = '';
             
             try {
-                const groqApiKey = await getGroqApiKey();
-                generatedSQL = await generateSQL(userQuery, groqApiKey);
+                generatedSQL = await generateSQL(userQuery);
                 const sqlCodeElement = sqlPreviewDiv.querySelector('.sql-code');
                 sqlCodeElement.textContent = generatedSQL;
                 sqlCodeElement.className = 'sql-code';
@@ -1068,7 +1129,7 @@ IMPORTANT RULES:
                     
                     try {
                         const result = await executeSQL(generatedSQL);
-                        const conversationalText = await generateConversationalResponse(userQuery, result, groqApiKey);
+                        const conversationalText = await generateConversationalResponse(userQuery, result);
                         responseDiv.textContent = conversationalText;
                         responseDiv.className = 'conversational-response';
                         
